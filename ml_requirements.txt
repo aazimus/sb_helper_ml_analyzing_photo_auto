@@ -1,0 +1,8 @@
+
+ultralytics>=8.0.0
+easyocr
+opencv-python
+torch==2.0.1+cpu
+torchvision==0.15.2+cpu
+torchaudio==2.0.2+cpu
+numpy
