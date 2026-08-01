@@ -98,3 +98,15 @@ htmlcov/
 # можно игнорировать все миграции, кроме __init__.py:
 */migrations/*.py
 !*/migrations/__init__.py
+
+# Веса моделей
+training/*.pt
+training/*.pth
+training/*.h5
+training/*.onnx
+
+# Тестовые фото/датасеты
+tests/tests/emul_max_group/
+datasets/
+data/
+media/
