@@ -49,6 +49,7 @@ tests/emul_max_group/*.png
 tests/emul_max_group/*.jpg
 tests/emul_max_group/*.jpeg
 tests/emul_max_group/*.bmp
+tests/Сброс/
 
 # Если хочешь игнорировать всю папку целиком — раскомментируй:
 # tests/emul_max_group/

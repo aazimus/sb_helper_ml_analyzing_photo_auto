@@ -1,6 +1,6 @@
 from django.db import models
-from django.conf import settings
 import os
+
 
 class CarPhotoRecord(models.Model):
     STATUS_CHOICES = [
@@ -15,13 +15,25 @@ class CarPhotoRecord(models.Model):
         verbose_name='Группа/проект',
     )
 
-    # Разрешаем null/blank, чтобы миграции прошли без вопросов про старые строки
-    photo_path = models.FilePathField(
-        path=settings.TEST_PHOTOS_DIR,
-        match=r'.*\.(jpg|jpeg|png|webp)$',
-        allow_files=True,
-        allow_folders=False,
-        verbose_name='Путь к файлу',
+    # Исходный путь (откуда пришло фото)
+    photo_path = models.CharField(
+        max_length=500,
+        verbose_name='Исходный путь',
+        null=True,
+        blank=True,
+    )
+
+    # Сохранённые файлы в media/
+    original_image = models.ImageField(
+        upload_to='originals/',
+        verbose_name='Оригинал',
+        null=True,
+        blank=True,
+    )
+
+    crop_image = models.ImageField(
+        upload_to='crops/',
+        verbose_name='Кроп номера',
         null=True,
         blank=True,
     )
@@ -46,7 +58,6 @@ class CarPhotoRecord(models.Model):
         verbose_name='Ошибка',
     )
 
-    # Тоже делаем nullable на время, чтобы не было диалогов про default
     created_at = models.DateTimeField(
         auto_now_add=True,
         verbose_name='Создано',

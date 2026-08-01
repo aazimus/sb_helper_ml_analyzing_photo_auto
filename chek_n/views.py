@@ -1,91 +1,71 @@
 # chek_n/views.py
 import os
-import requests
+import json
+import logging
+import shutil
+from pathlib import Path
+
+from django.conf import settings
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from .models import CarPhotoRecord
-from .ocr_service import recognize_plate
 
-@csrf_exempt  # Только для теста! В продакшене так нельзя.
+from .tasks import process_photo_task
+
+logger = logging.getLogger(__name__)
+
+
+@csrf_exempt
 def webhook_simple(request):
     if request.method != 'POST':
         return JsonResponse({'error': 'Только POST'}, status=405)
 
     try:
-        data = request.POST if request.POST else {}
-        if not data and request.body:
-            import json
-            data = json.loads(request.body)
-    except Exception:
+        data = json.loads(request.body) if request.body else {}
+    except Exception as e:
+        logger.error(f"Неверный JSON: {e}")
         return JsonResponse({'error': 'Неверный JSON'}, status=400)
 
-    group_name = data.get('group_name')
-    photo_url = data.get('photo_url')  # тут может быть и путь, и URL — это нормально
-
-    if not group_name or not photo_url:
-        return JsonResponse({'error': 'Нужны group_name и photo_url'}, status=400)
-
-    record = CarPhotoRecord.objects.create(
-        group_name=group_name,
-        photo_path=photo_url,
-        status='pending',
+    file_info = data.get('file') or {}
+    photo_path = file_info.get('path') or data.get('photo_url') or data.get('path')
+    group_name = (
+        data.get('group_name')
+        or data.get('chat_id')
+        or data.get('user_id')
+        or 'default-group'
     )
 
+    if not photo_path:
+        return JsonResponse({'error': 'Не передан путь к файлу'}, status=400)
+
+    src = Path(photo_path)
+    if not src.exists():
+        logger.error(f"Файл не найден: {photo_path}")
+        return JsonResponse({'error': 'Файл не найден на диске'}, status=400)
+
+    incoming_dir = Path(settings.MEDIA_ROOT) / 'incoming'
+    incoming_dir.mkdir(parents=True, exist_ok=True)
+
+    dest = incoming_dir / src.name
+    try:
+        shutil.copy2(src, dest)
+    except Exception as e:
+        logger.exception(f"Не удалось скопировать файл: {e}")
+        return JsonResponse({'error': 'Ошибка копирования файла'}, status=500)
+
+    process_photo_task.delay(str(dest), str(group_name), str(photo_path))
+
+    logger.info(f"Задача поставлена: {dest.name} | группа={group_name}")
+
     return JsonResponse({
-        'id': record.id,
-        'group_name': record.group_name,
-        'photo_url': record.photo_path,
-        'status': record.status,
-    }, status=201)
+        'status': 'accepted',
+        'message': 'Фото принято в обработку',
+        'group_name': group_name,
+        'file': src.name,
+    }, status=202)
 
 
 @csrf_exempt
 def finish_processing(request, record_id):
-    try:
-        record = CarPhotoRecord.objects.get(pk=record_id)
-    except CarPhotoRecord.DoesNotExist:
-        return JsonResponse({'error': 'Запись не найдена'}, status=404)
-
-    url_or_path = record.photo_path
-
-    # Если это локальный путь и файл реально существует — используем как есть
-    if os.path.exists(url_or_path):
-        local_path = url_or_path
-    else:
-        # Если это URL — пытаемся скачать во временную папку
-        local_dir = 'temp_photos'
-        os.makedirs(local_dir, exist_ok=True)
-        filename = os.path.basename(url_or_path.replace('%20', ' '))
-        local_path = os.path.join(local_dir, filename)
-
-        try:
-            r = requests.get(url_or_path, timeout=10)
-            r.raise_for_status()
-            with open(local_path, 'wb') as f:
-                f.write(r.content)
-        except Exception as e:
-            record.status = 'error'
-            record.plate_number = f'Не удалось скачать фото: {e}'
-            record.save()
-            return JsonResponse({
-                'id': record.id,
-                'status': record.status,
-                'plate_number': record.plate_number,
-            })
-
-    plate = recognize_plate(local_path)
-
-    if plate is None or str(plate).strip() == '':
-        record.status = 'error'
-        record.plate_number = 'Не удалось распознать номер'
-    else:
-        record.status = 'success'
-        record.plate_number = plate
-
-    record.save()
-
     return JsonResponse({
-        'id': record.id,
-        'status': record.status,
-        'plate_number': record.plate_number,
+        'message': 'Больше не используется. Обработка идёт через Celery.',
     })
