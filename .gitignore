@@ -1,0 +1,102 @@
+# =========================================================
+# КОРЕНЬ ПРОЕКТА: защита всего репозитория
+# =========================================================
+
+# Виртуальное окружение (в корне) — критично!
+.venv/
+venv/
+env/
+
+
+
+# Docker-файлы окружения
+.env
+docker-compose.override.yml
+
+# ---------------------------------------------------------
+# Твой существующий список (оставляем как есть)
+# ---------------------------------------------------------
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+db.sqlite3
+
+node_modules/
+dist/
+build/
+*.log
+.env.local
+
+# ML: веса моделей
+models/*.pt
+models/*.pth
+models/*.onnx
+# models/                        # раскомментируй, если хочешь игнорировать всю папку models
+
+# Медиа, датасеты, исходники
+media/
+uploads/
+data/
+datasets/
+
+# Тесты и эмуляторы (фото)
+tests/emul_max_group/*.png
+tests/emul_max_group/*.jpg
+tests/emul_max_group/*.jpeg
+tests/emul_max_group/*.bmp
+tests/Сброс/
+# tests/emul_max_group/         # раскомментируй, чтобы игнорировать всю папку целиком
+
+# CSV разметки
+training/*.csv
+
+# Временные/копии скриптов
+*copy.py
+*_copy.py
+*-copy.py
+backup_*.py
+old_*.py
+
+# Логи, IDE, кэш
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.pytest_cache/
+
+# Миграции Django (оставляем только __init__.py)
+*/migrations/*.py
+!*/migrations/__init__.py
+
+# Веса моделей (дополнительно)
+training/*.pt
+training/*.pth
+training/*.h5
+training/*.onnx
