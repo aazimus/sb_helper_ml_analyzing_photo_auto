@@ -1,5 +1,7 @@
-﻿import json
+﻿import hmac
+import json
 import logging
+import os
 
 from django.conf import settings
 from django.http import JsonResponse
@@ -10,7 +12,22 @@ from .tasks import process_photo_task
 logger = logging.getLogger(__name__)
 
 
-def _parse_max_message(payload):
+def _verify_webhook_secret(request) -> bool:
+    """
+    Проверяет секретный ключ вебхука из заголовка X-Max-Bot-Api-Secret.
+    Использует hmac.compare_digest для защиты от Timing Attacks.
+    """
+    secret = request.headers.get("X-Max-Bot-Api-Secret")
+    # Берем секрет из settings (если задан там) или из переменных окружения
+    expected = getattr(settings, "WEBHOOK_SECRET", None) or os.environ.get("WEBHOOK_SECRET", "my_secret_123")
+
+    if not secret:
+        return False
+
+    return hmac.compare_digest(str(secret), str(expected))
+
+
+def _parse_max_message(payload: dict) -> dict:
     """
     Встроенная версия парсера. Вытаскивает chat_id, текст и картинки (url + token).
     Не падает, если структура JSON немного отличается.
@@ -21,42 +38,50 @@ def _parse_max_message(payload):
         "images": []
     }
 
+    if not isinstance(payload, dict):
+        return result
+
     try:
-        message = payload.get("message", {})
-        recipient = message.get("recipient", {})
+        message = payload.get("message") or {}
+        recipient = message.get("recipient") or {}
         result["chat_id"] = recipient.get("chat_id")
 
-        body = message.get("body", {})
-        if "text" in body:
+        body = message.get("body") or {}
+        if "text" in body and body["text"] is not None:
             result["text"] = str(body["text"])
 
-        attachments = body.get("attachments", [])
+        attachments = body.get("attachments") or []
         for att in attachments:
-            if att.get("type") == "image":
-                p = att.get("payload", {})
+            if isinstance(att, dict) and att.get("type") == "image":
+                p = att.get("payload") or {}
                 url = p.get("url")
                 token = p.get("token")
                 if url and token:
                     result["images"].append({"url": url, "token": token})
-    except Exception:
-        # Если JSON совсем битый — просто вернём пустой результат
-        pass
+    except Exception as e:
+        logger.warning(f"Ошибка при разборе структуры сообщения MAX: {e}")
 
     return result
 
 
 @csrf_exempt
 def webhook_max(request):
+    """Основной обработчик вебхуков от MAX."""
     if request.method != "POST":
         return JsonResponse({"error": "Только POST"}, status=405)
 
+    # Если на основном вебхуке тоже нужна проверка секрета — оставьте этот блок.
+    # Если не нужна — закомментируйте следующие 4 строки.
+    if not _verify_webhook_secret(request):
+        logger.warning("Попытка доступа к webhook_max с неверным секретным ключом")
+        return JsonResponse({"error": "Неверный секретный ключ"}, status=403)
+
     try:
         payload = json.loads(request.body) if request.body else {}
-    except Exception as e:
+    except json.JSONDecodeError as e:
         logger.error(f"Неверный JSON от MAX: {e}")
         return JsonResponse({"error": "Неверный JSON"}, status=400)
 
-    # Используем встроенную функцию, никакого импорта из parsers
     parsed = _parse_max_message(payload)
 
     chat_id = parsed["chat_id"]
@@ -94,14 +119,12 @@ def webhook_max(request):
 
 @csrf_exempt
 def webhook_test(request):
+    """Тестовый эндпоинт для проверки заголовка безопасности вебхука."""
     if request.method != "POST":
         return JsonResponse({"error": "Только POST"}, status=405)
 
-    secret = request.headers.get("X-Max-Bot-Api-Secret")
-    logger.info(f"Проверка секрета: пришёл={secret}")
-
-    expected = os.environ.get("WEBHOOK_SECRET", "my_secret_123")`r`n    if secret != expected:
-        logger.warning("Секретный ключ не совпадает!")
+    if not _verify_webhook_secret(request):
+        logger.warning("Проверка секрета в webhook_test: ключ не совпадает или отсутствует")
         return JsonResponse({
             "status": "error",
             "secret_check": "failed",
@@ -114,4 +137,3 @@ def webhook_test(request):
         "secret_check": "passed",
         "message": "Тест прошёл успешно",
     }, status=200)
-
