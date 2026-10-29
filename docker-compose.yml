@@ -38,6 +38,7 @@ services:
     restart: unless-stopped
     volumes:
       - media_data:/app/backend/media
+      - static_data:/app/backend/static
     expose:
       - "8000"
     depends_on:
@@ -97,3 +98,4 @@ services:
 volumes:
   pg_data:
   media_data:
+  static_data:

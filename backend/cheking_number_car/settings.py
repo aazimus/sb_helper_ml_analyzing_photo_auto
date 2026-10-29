@@ -1,4 +1,4 @@
-"""
+﻿"""
 Django settings for cheking_number_car project.
 """
 
@@ -102,7 +102,7 @@ USE_TZ = True
 # -----------------------------------------------------------------------
 # Статика и медиа
 # -----------------------------------------------------------------------
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 # STATICFILES_DIRS — только если папка реально существует
