@@ -1,9 +1,5 @@
-# chek_n/views.py
-import os
-import json
+﻿import json
 import logging
-import shutil
-from pathlib import Path
 
 from django.conf import settings
 from django.http import JsonResponse
@@ -11,99 +7,111 @@ from django.views.decorators.csrf import csrf_exempt
 
 from .tasks import process_photo_task
 
-
-from django.http import HttpResponse
-
 logger = logging.getLogger(__name__)
 
 
+def _parse_max_message(payload):
+    """
+    Встроенная версия парсера. Вытаскивает chat_id, текст и картинки (url + token).
+    Не падает, если структура JSON немного отличается.
+    """
+    result = {
+        "chat_id": None,
+        "text": "",
+        "images": []
+    }
+
+    try:
+        message = payload.get("message", {})
+        recipient = message.get("recipient", {})
+        result["chat_id"] = recipient.get("chat_id")
+
+        body = message.get("body", {})
+        if "text" in body:
+            result["text"] = str(body["text"])
+
+        attachments = body.get("attachments", [])
+        for att in attachments:
+            if att.get("type") == "image":
+                p = att.get("payload", {})
+                url = p.get("url")
+                token = p.get("token")
+                if url and token:
+                    result["images"].append({"url": url, "token": token})
+    except Exception:
+        # Если JSON совсем битый — просто вернём пустой результат
+        pass
+
+    return result
+
+
 @csrf_exempt
-def webhook_simple(request):
-    if request.method != 'POST':
-        return JsonResponse({'error': 'Только POST'}, status=405)
+def webhook_max(request):
+    if request.method != "POST":
+        return JsonResponse({"error": "Только POST"}, status=405)
 
     try:
-        data = json.loads(request.body) if request.body else {}
+        payload = json.loads(request.body) if request.body else {}
     except Exception as e:
-        logger.error(f"Неверный JSON: {e}")
-        return JsonResponse({'error': 'Неверный JSON'}, status=400)
+        logger.error(f"Неверный JSON от MAX: {e}")
+        return JsonResponse({"error": "Неверный JSON"}, status=400)
 
-    file_info = data.get('file') or {}
-    photo_path = file_info.get('path') or data.get('photo_url') or data.get('path')
-    group_name = (
-        data.get('group_name')
-        or data.get('chat_id')
-        or data.get('user_id')
-        or 'default-group'
-    )
+    # Используем встроенную функцию, никакого импорта из parsers
+    parsed = _parse_max_message(payload)
 
-    if not photo_path:
-        return JsonResponse({'error': 'Не передан путь к файлу'}, status=400)
+    chat_id = parsed["chat_id"]
+    text = parsed["text"]
+    images = parsed["images"]
 
-    src = Path(photo_path)
-    if not src.exists():
-        logger.error(f"Файл не найден: {photo_path}")
-        return JsonResponse({'error': 'Файл не найден на диске'}, status=400)
+    if chat_id is None:
+        logger.warning("Не удалось извлечь chat_id из сообщения MAX")
+        return JsonResponse({"error": "Не найден chat_id"}, status=400)
 
-    incoming_dir = Path(settings.MEDIA_ROOT) / 'incoming'
-    incoming_dir.mkdir(parents=True, exist_ok=True)
+    if not images:
+        logger.info(f"Сообщение от chat_id={chat_id} без картинок. Текст: {text[:50]}")
+        return JsonResponse({
+            "status": "ok",
+            "message": "Сообщение получено, картинок нет",
+            "chat_id": chat_id,
+        }, status=200)
 
-    dest = incoming_dir / src.name
-    try:
-        shutil.copy2(src, dest)
-    except Exception as e:
-        logger.exception(f"Не удалось скопировать файл: {e}")
-        return JsonResponse({'error': 'Ошибка копирования файла'}, status=500)
-
-    process_photo_task.delay(str(dest), str(group_name), str(photo_path))
-
-    logger.info(f"Задача поставлена: {dest.name} | группа={group_name}")
+    for img in images:
+        process_photo_task.delay(
+            url=img["url"],
+            token=img["token"],
+            chat_id=str(chat_id),
+            source="max"
+        )
+        logger.info(f"Задача Celery поставлена: chat_id={chat_id}, url={img['url'][:60]}...")
 
     return JsonResponse({
-        'status': 'accepted',
-        'message': 'Фото принято в обработку',
-        'group_name': group_name,
-        'file': src.name,
+        "status": "accepted",
+        "message": f"Принято {len(images)} изображений для обработки",
+        "chat_id": chat_id,
+        "images_count": len(images),
     }, status=202)
 
 
 @csrf_exempt
-def finish_processing(request, record_id):
-    return JsonResponse({
-        'message': 'Больше не используется. Обработка идёт через Celery.',
-    })
-@csrf_exempt
 def webhook_test(request):
     if request.method != "POST":
-        return JsonResponse({'error': 'Только POST'}, status=405)
+        return JsonResponse({"error": "Только POST"}, status=405)
 
-    print("--- Пришёл вебхук от MAX (ТЕСТ) ---")
+    secret = request.headers.get("X-Max-Bot-Api-Secret")
+    logger.info(f"Проверка секрета: пришёл={secret}")
 
-    # Безопасное получение заголовков
-    headers_dict = dict(request.headers)
-    print("Headers:", headers_dict)
-
-    body_text = ""
-    try:
-        body_text = request.body.decode('utf-8', errors='ignore')
-        print("Body (raw):", body_text)
-    except Exception as e:
-        print(f"⚠️ Ошибка декодирования body: {e}")
-
-    secret = request.headers.get('X-Max-Bot-Api-Secret')
-    if secret != 'my_secret_123':
-        print("⚠️ Секретный ключ не совпадает! Пришёл:", secret)
-        # Для теста всё равно отдадим 200, чтобы MAX не помечал вебхук как сломанный
+    expected = os.environ.get("WEBHOOK_SECRET", "my_secret_123")`r`n    if secret != expected:
+        logger.warning("Секретный ключ не совпадает!")
         return JsonResponse({
-            'status': 'received',
-            'secret_check': 'failed',
-            'message': 'Запрос получен, но секрет не совпадает'
-        }, status=200)
-    else:
-        print("✅ Секретный ключ верный.")
+            "status": "error",
+            "secret_check": "failed",
+            "message": "Неверный секретный ключ",
+        }, status=403)
 
+    logger.info("Секретный ключ верный. Тест прошёл успешно.")
     return JsonResponse({
-        'status': 'ok',
-        'secret_check': 'passed',
-        'message': 'Тест прошёл успешно'
+        "status": "ok",
+        "secret_check": "passed",
+        "message": "Тест прошёл успешно",
     }, status=200)
+

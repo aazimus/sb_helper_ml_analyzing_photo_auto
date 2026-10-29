@@ -1,4 +1,4 @@
-from django.db import models
+﻿from django.db import models
 import os
 
 
@@ -74,6 +74,12 @@ class CarPhotoRecord(models.Model):
         verbose_name = 'Фото авто'
         verbose_name_plural = 'Фото авто'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['plate_number']),
+            models.Index(fields=['group_name']),
+            models.Index(fields=['-created_at']),
+            models.Index(fields=['status']),
+        ]
 
     def __str__(self):
         filename = os.path.basename(self.photo_path) if self.photo_path else 'без файла'

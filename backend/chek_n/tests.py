@@ -1,85 +1,109 @@
+import os
+import json
+from pathlib import Path
 from django.test import TestCase, Client
 from django.urls import reverse
-from .models import CarPhotoRecord
+from celery import current_app
 from unittest.mock import patch
+
+from chek_n.models import CarPhotoRecord
+from chek_n.tasks import process_photo_task
+
+# ВАЖНО: этот путь строится от корня проекта (где лежит manage.py)
+# Мы поднимаемся от __file__ на 2 уровня вверх: backend/tests -> backend
+BASE_DIR = Path(__file__).resolve().parent.parent
+FIXTURES_DIR = BASE_DIR / "tests" / "fixtures"
 
 class CarPhotoRecordTests(TestCase):
     def setUp(self):
-        """Подготавливаем данные перед каждым тестом"""
         self.client = Client()
-        self.webhook_url = reverse('webhook_simple')  # проверь, что имя совпадает с urls.py
-        self.finish_url_template = '/api/finish/{}/'
+        self.webhook_url = reverse('webhook_max')
+        current_app.control.purge()
 
-    @patch('chek_n.views.recognize_plate')
-    def test_webhook_creates_record_with_pending_status(self, mock_ocr):
-        """Тест 1: Webhook создаёт запись со статусом pending"""
-        mock_ocr.return_value = "A001AA777"  # заглушка, чтобы тест не зависел от сети
+    @patch('chek_n.tasks.recognize_plate')
+    def test_webhook_accepts_max_payload(self, mock_ocr):
+        mock_ocr.return_value = ("A001AA777", "/tmp/crop.jpg")
+
         payload = {
-            "group_name": "Тестовая группа",
-            "photo_url": "http://example.com/test.jpg"
+            "message": {
+                "recipient": {"chat_id": 987654321},
+                "body": {
+                    "text": "Проверь номер",
+                    "attachments": [
+                        {
+                            "type": "image",
+                            "payload": {
+                                "url": "https://via.placeholder.com/300.png",
+                                "token": "fake-token-123"
+                            }
+                        }
+                    ]
+                }
+            }
         }
 
-        response = self.client.post(self.webhook_url, data=payload, content_type='application/json')
+        response = self.client.post(
+            self.webhook_url,
+            data=json.dumps(payload),
+            content_type='application/json',
+            HTTP_X_MAX_BOT_API_SECRET='my_secret_123'
+        )
 
-        self.assertEqual(response.status_code, 201)
-        self.assertTrue(CarPhotoRecord.objects.exists())
-        record = CarPhotoRecord.objects.first()
-        self.assertEqual(record.status, CarPhotoRecord.STATUS_PENDING)
-        self.assertEqual(record.group_name, "Тестовая группа")
-
-    @patch('chek_n.views.recognize_plate')
-    def test_finish_returns_404_for_nonexistent_record(self, mock_ocr):
-        """Тест 4: Finish возвращает 404, если запись не найдена"""
-        nonexistent_id = 99999
-        finish_url = self.finish_url_template.format(nonexistent_id)
-        response = self.client.post(finish_url)
-
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 202)
         data = response.json()
-        self.assertIn('error', data)
+        self.assertEqual(data['status'], 'accepted')
+        self.assertTrue(CarPhotoRecord.objects.exists())
 
-    @patch('chek_n.views.recognize_plate')
-    def test_finish_sets_done_and_saves_plate_when_ocr_succeeds(self, mock_ocr):
-        """Тест 2: Finish ставит done и сохраняет номер, если OCR что-то вернул"""
-        # 1. Сначала создадим запись
-        create_payload = {
-            "group_name": "Группа 2",
-            "photo_url": "http://example.com/car.jpg"
-        }
-        create_resp = self.client.post(self.webhook_url, data=create_payload, content_type='application/json')
-        record_id = create_resp.json()['id']
+    def test_celery_task_processes_real_file(self):
+        if not FIXTURES_DIR.exists():
+            contents = [p.name for p in Path(BASE_DIR).iterdir()] if Path(BASE_DIR).is_dir() else []
+            self.skipTest(f"Папка {FIXTURES_DIR} не найдена. Видимые папки в BASE_DIR: {contents}")
 
-        # 2. Подменяем результат OCR на реальный номер
-        mock_ocr.return_value = "В123ВВ799"
+        files = list(FIXTURES_DIR.glob("*.jpg")) + list(FIXTURES_DIR.glob("*.png"))
+        if not files:
+            contents = [p.name for p in FIXTURES_DIR.iterdir()] if FIXTURES_DIR.is_dir() else []
+            self.skipTest(f"В папке {FIXTURES_DIR} нет картинок (.jpg/.png). Видимые файлы: {contents}")
 
-        # 3. Вызываем finish
-        finish_url = self.finish_url_template.format(record_id)
-        response = self.client.post(finish_url)
+        test_file = files[0]
 
+        with open(test_file, "rb") as f:
+            real_image_bytes = f.read()
+
+        mock_resp = type('Response', (object,), {
+            'status_code': 200,
+            'content': real_image_bytes
+        })
+
+        with patch('chek_n.tasks.requests.get', return_value=mock_resp):
+            result = process_photo_task(
+                url="http://fake.url/test.jpg",
+                token="secret-token",
+                chat_id="999888777",
+                group_name="Real File Test Group",
+                source="max"
+            )
+
+        self.assertEqual(result['status'], 'success')
+
+        record = CarPhotoRecord.objects.last()
+        self.assertIsNotNone(record)
+        self.assertIsNotNone(record.plate_number)
+        self.assertEqual(record.status, 'success')
+        self.assertTrue(len(record.plate_number.strip()) > 0)
+
+    def test_webhook_rejects_without_secret(self):
+        payload = {"message": {"recipient": {"chat_id": 123}, "body": {"text": "Hi", "attachments": []}}}
+        response = self.client.post(self.webhook_url, data=json.dumps(payload), content_type='application/json')
+        self.assertEqual(response.status_code, 403)
+
+    def test_webhook_rejects_no_images(self):
+        payload = {"message": {"recipient": {"chat_id": 456}, "body": {"text": "Просто текст"}}}
+        response = self.client.post(
+            self.webhook_url,
+            data=json.dumps(payload),
+            content_type='application/json',
+            HTTP_X_MAX_BOT_API_SECRET='my_secret_123'
+        )
         self.assertEqual(response.status_code, 200)
-        record = CarPhotoRecord.objects.get(pk=record_id)
-        self.assertEqual(record.status, CarPhotoRecord.STATUS_DONE)
-        self.assertEqual(record.plate_number, "В123ВВ799")
-
-    @patch('chek_n.views.recognize_plate')
-    def test_finish_sets_error_when_ocr_returns_none(self, mock_ocr):
-        """Тест 3: Finish ставит error, если OCR ничего не нашёл (None)"""
-        # 1. Создаём запись
-        create_payload = {
-            "group_name": "Группа 3",
-            "photo_url": "http://example.com/bad.jpg"
-        }
-        create_resp = self.client.post(self.webhook_url, data=create_payload, content_type='application/json')
-        record_id = create_resp.json()['id']
-
-        # 2. Говорим OCR: «ничего не распозналось»
-        mock_ocr.return_value = None
-
-        # 3. Вызываем finish
-        finish_url = self.finish_url_template.format(record_id)
-        response = self.client.post(finish_url)
-
-        self.assertEqual(response.status_code, 200)  # API всё равно должен ответить 200, даже если результат плохой
-        record = CarPhotoRecord.objects.get(pk=record_id)
-        self.assertEqual(record.status, CarPhotoRecord.STATUS_ERROR)
-        self.assertEqual(record.plate_number, "Не удалось распознать номер")
+        data = response.json()
+        self.assertEqual(data['message'], 'Сообщение получено, картинок нет')

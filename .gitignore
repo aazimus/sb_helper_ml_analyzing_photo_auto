@@ -60,13 +60,12 @@ datasets/
 
 # Тесты и эмуляторы (фото)
 
-tests/emul_max_group/
-tests/emul_max_group/*.png
-tests/emul_max_group/*.jpg
-tests/emul_max_group/*.jpeg
-tests/emul_max_group/*.bmp
-tests/emul_max_group/*.sent
-tests/Сброс/
+backend/tests/emul_max_group/
+backend/tests/emul_max_group/*.png
+backend/tests/emul_max_group/*.jpg
+backend/tests/emul_max_group/*.jpeg
+backend/tests/emul_max_group/*.bmp
+backend/tests/emul_max_group/*.sent
 # tests/emul_max_group/         # раскомментируй, чтобы игнорировать всю папку целиком
 
 # CSV разметки

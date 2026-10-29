@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+
+# Python кэш
+**/__pycache__
+**/*.pyc
+**/*.pyo
+*.egg-info
+
+# Виртуальное окружение
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Тесты и отчёты
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Frontend node_modules (не нужны — npm ci их поставит заново в контейнере)
+frontend/node_modules/
+
+# Логи
+*.log
+
+# SQLite (используем PostgreSQL)
+*.sqlite3
+
+# Временные файлы
+*.swp
+*.swo

@@ -1,10 +1,8 @@
-import os
+﻿import os
 import json
 import logging
-import torch
 import numpy as np
 from PIL import Image
-from ultralytics import YOLO
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -21,7 +19,9 @@ TEMP_CROPS_DIR = os.path.join(BASE_DIR, "media", "temp_crops")
 
 os.makedirs(TEMP_CROPS_DIR, exist_ok=True)
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+# torch и YOLO импортируются лениво — только при первом вызове _load_models()
+# Это позволяет backend-контейнеру (без torch) стартовать без ошибок
+device = None
 
 
 # ---------------------------------------------------------
@@ -189,10 +189,16 @@ _latin_to_cyr = None
 
 
 def _load_models():
-    global _yolo, _crnn, _idx2char, _BLANK, _latin_to_cyr
+    global _yolo, _crnn, _idx2char, _BLANK, _latin_to_cyr, device
 
     if _yolo is not None:
         return
+
+    # Ленивый импорт: torch и ultralytics нужны только в worker-контейнере
+    import torch
+    from ultralytics import YOLO
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     logger.info("=" * 50)
     logger.info("Загрузка YOLO + CRNN моделей...")
@@ -313,3 +319,4 @@ def recognize_plate(image_path: str) -> tuple[str | None, str | None]:
     except Exception as e:
         logger.exception(f"Ошибка в recognize_plate: {e}")
         return None, None
+
