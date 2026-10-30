@@ -1,11 +1,10 @@
-# chek_n/api_views.py
 from rest_framework import generics
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django_filters import rest_framework as filters
 from django.db.models import Q
 
-from .models import CarPhotoRecord
+from .models import CarPhotoRecord, ChatGroup
 from .serializers import CarPhotoRecordSerializer
 
 
@@ -50,14 +49,13 @@ class RecordDetailAPIView(generics.RetrieveAPIView):
 
 
 class GroupListAPIView(APIView):
-    """GET /api/groups/ — список уникальных групп"""
+    """GET /api/groups/ — список активных групп из админки"""
 
     def get(self, request):
         groups = (
-            CarPhotoRecord.objects
-            .filter(status='success')
-            .values_list('group_name', flat=True)
-            .distinct()
-            .order_by('group_name')
+            ChatGroup.objects
+            .filter(is_active=True)
+            .values_list('name', flat=True)
+            .order_by('name')
         )
         return Response(list(groups))

@@ -2,7 +2,7 @@ import json
 import sys
 from unittest.mock import patch, MagicMock
 from django.test import TestCase, Client, override_settings
-from chek_n.models import CarPhotoRecord
+from chek_n.models import CarPhotoRecord, ChatGroup
 from chek_n.tasks import process_photo_task
 
 WEBHOOK_PAYLOAD_1_PHOTO = {
@@ -102,6 +102,9 @@ class CarPhotoRecordTests(TestCase):
         self.client = Client()
         self.webhook_url = "/api/webhook/max/"
         self.headers = {"HTTP_X_MAX_BOT_API_SECRET": "my_secret_123"}
+        # Очищаем таблицы перед каждым тестом для полной изоляции
+        ChatGroup.objects.all().delete()
+        CarPhotoRecord.objects.all().delete()
 
     def test_webhook_rejects_invalid_secret(self):
         resp = self.client.post(
@@ -128,10 +131,21 @@ class CarPhotoRecordTests(TestCase):
 
     @patch("requests.get")
     def test_celery_task_processes_max_photos(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
-        mock_get.return_value = mock_response
+        chat_info_response = MagicMock()
+        chat_info_response.status_code = 200
+        chat_info_response.json.return_value = {"title": "Тестовая Автомойка"}
+
+        image_response = MagicMock()
+        image_response.status_code = 200
+        image_response.content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+
+        # Безопасное разделение моков по домену или пути
+        def side_effect(url, *args, **kwargs):
+            if "platform-api.max.ru" in str(url):
+                return chat_info_response
+            return image_response
+
+        mock_get.side_effect = side_effect
 
         mock_ocr_module = MagicMock()
         mock_ocr_module.recognize_plate.side_effect = [(plate, None) for plate in EXPECTED_PLATES]
@@ -150,7 +164,39 @@ class CarPhotoRecordTests(TestCase):
                     source="max"
                 )
 
+        group = ChatGroup.objects.get(chat_id="-79397419554856")
+        self.assertEqual(group.name, "Тестовая Автомойка")
+        self.assertTrue(group.is_active)
+
         records = CarPhotoRecord.objects.filter(status="success").order_by("id")
         self.assertEqual(records.count(), 4)
         saved_plates = [r.plate_number for r in records]
         self.assertEqual(saved_plates, EXPECTED_PLATES)
+
+        group = ChatGroup.objects.get(chat_id="-79397419554856")
+        self.assertEqual(group.name, "Тестовая Автомойка")
+        self.assertTrue(group.is_active)
+
+        records = CarPhotoRecord.objects.filter(status="success").order_by("id")
+        self.assertEqual(records.count(), 4)
+        saved_plates = [r.plate_number for r in records]
+        self.assertEqual(saved_plates, EXPECTED_PLATES)
+
+    @patch("requests.get")
+    def test_chat_group_blocking(self, mock_get):
+        ChatGroup.objects.create(
+            chat_id="-79397419554856",
+            name="Заблокированный чат",
+            is_active=False
+        )
+
+        att = WEBHOOK_PAYLOAD_1_PHOTO["message"]["body"]["attachments"][0]["payload"]
+        res = process_photo_task(
+            url=att["url"],
+            token=att["token"],
+            chat_id="-79397419554856",
+            source="max"
+        )
+
+        self.assertEqual(res.get("status"), "blocked")
+        self.assertEqual(CarPhotoRecord.objects.count(), 0)

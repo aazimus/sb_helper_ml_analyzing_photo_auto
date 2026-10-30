@@ -2,6 +2,21 @@
 import os
 
 
+class ChatGroup(models.Model):
+    chat_id = models.CharField(max_length=255, unique=True, verbose_name="ID чата в MAX")
+    name = models.CharField(max_length=255, blank=True, null=True, verbose_name="Название чата")
+    is_active = models.BooleanField(default=True, verbose_name="Активен (отслеживать)")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Дата первого обращения")
+
+    def __str__(self):
+        status = "Активен" if self.is_active else "Заблокирован"
+        return f"{self.name or self.chat_id} ({status})"
+
+    class Meta:
+        verbose_name = "Группа (Чат)"
+        verbose_name_plural = "Группы (Чаты)"
+
+
 class CarPhotoRecord(models.Model):
     STATUS_CHOICES = [
         ('pending', 'В очереди'),
@@ -12,27 +27,28 @@ class CarPhotoRecord(models.Model):
 
     group_name = models.CharField(
         max_length=255,
+        default="default-group",
         verbose_name='Группа/проект',
     )
 
-    # Исходный путь (откуда пришло фото)
+    # Исходный путь или URL (откуда пришло фото)
     photo_path = models.CharField(
-        max_length=500,
-        verbose_name='Исходный путь',
+        max_length=1024,
+        verbose_name='Исходный путь / URL',
         null=True,
         blank=True,
     )
 
     # Сохранённые файлы в media/
     original_image = models.ImageField(
-        upload_to='originals/',
+        upload_to='car_photos/originals/',
         verbose_name='Оригинал',
         null=True,
         blank=True,
     )
 
     crop_image = models.ImageField(
-        upload_to='crops/',
+        upload_to='car_photos/crops/',
         verbose_name='Кроп номера',
         null=True,
         blank=True,
@@ -82,5 +98,5 @@ class CarPhotoRecord(models.Model):
         ]
 
     def __str__(self):
-        filename = os.path.basename(self.photo_path) if self.photo_path else 'без файла'
-        return f"{self.group_name} | {filename} | {self.get_status_display()}"
+        plate = self.plate_number or 'НЕ РАСПОЗНАН'
+        return f"[{plate}] Группа: {self.group_name} ({self.get_status_display()})"

@@ -1,15 +1,44 @@
 # chek_n/admin.py
 from django.contrib import admin
+from django import forms
 from django.utils.html import format_html
-from .models import CarPhotoRecord
-import os
+from .models import CarPhotoRecord, ChatGroup
+
+
+class CarPhotoRecordAdminForm(forms.ModelForm):
+    """Кастомная форма для админки CarPhotoRecord с выпадающим списком групп из ChatGroup"""
+    group_name = forms.ChoiceField(label="Группа чата", choices=[])
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Динамически получаем все существующие группы из таблицы ChatGroup
+        group_choices = list(ChatGroup.objects.values_list('name', 'name').order_by('name'))
+        
+        # Если групп еще нет, добавим заглушку, чтобы форма не падала
+        if not group_choices:
+            group_choices = [('default-group', 'default-group')]
+            
+        self.fields['group_name'].choices = group_choices
+
+    class Meta:
+        model = CarPhotoRecord
+        fields = '__all__'
+
+
+@admin.register(ChatGroup)
+class ChatGroupAdmin(admin.ModelAdmin):
+    list_display = ('chat_id', 'name', 'is_active', 'created_at')
+    list_editable = ('is_active',)  # Галочка быстрого отключения/включения прямо в таблице
+    search_fields = ('chat_id', 'name')
+    list_filter = ('is_active', 'created_at')
 
 
 @admin.register(CarPhotoRecord)
 class CarPhotoRecordAdmin(admin.ModelAdmin):
+    form = CarPhotoRecordAdminForm  # Подключаем форму с выпадающим списком групп
     list_display = (
         'id',
-        'group_name',          # группа на первом месте после id
+        'group_name',       # группа на первом месте после id
         'plate_number',
         'crop_preview',
         'created_at_display',
