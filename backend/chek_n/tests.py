@@ -1,109 +1,156 @@
-import os
 import json
-from pathlib import Path
-from django.test import TestCase, Client
-from django.urls import reverse
-from celery import current_app
-from unittest.mock import patch
-
+import sys
+from unittest.mock import patch, MagicMock
+from django.test import TestCase, Client, override_settings
 from chek_n.models import CarPhotoRecord
 from chek_n.tasks import process_photo_task
 
-# ВАЖНО: этот путь строится от корня проекта (где лежит manage.py)
-# Мы поднимаемся от __file__ на 2 уровня вверх: backend/tests -> backend
-BASE_DIR = Path(__file__).resolve().parent.parent
-FIXTURES_DIR = BASE_DIR / "tests" / "fixtures"
+WEBHOOK_PAYLOAD_1_PHOTO = {
+    "message": {
+        "recipient": {"chat_type": "chat", "chat_id": -79397419554856},
+        "timestamp": 1792945647384,
+        "body": {
+            "mid": "mid.ffffb7c9d902e7d801a173e36f180a84",
+            "seq": 117502485946960516,
+            "text": "",
+            "attachments": [
+                {
+                    "payload": {
+                        "photo_id": 47628366120,
+                        "token": "ouqxt1KuEBDYI25VuOHlIBz9FoXJd/Pc07JeJWrKj0RWgpTi8q1N6j3cjBMkbXUiaCKs/jUuwlRDR1k7Lw/IcZ9l5aENQV63GySTXnXEcd0=",
+                        "url": "https://i.oneme.ru/i?r=BTGWjORktRiuuNetttkJiSt5jBsd8iKpbRc4HJXsqVeDX2Zw5IyjmFCjDHMXD0Bdtn0"
+                    },
+                    "type": "image"
+                }
+            ]
+        },
+        "sender": {
+            "user_id": 206251816,
+            "first_name": "Артур",
+            "is_bot": False,
+            "last_name": "Беккер",
+            "last_activity_time": 1792945648000,
+            "name": "Артур Беккер"
+        }
+    },
+    "timestamp": 1792945647384,
+    "update_type": "message_created"
+}
 
+WEBHOOK_PAYLOAD_4_PHOTOS = {
+    "message": {
+        "recipient": {"chat_type": "chat", "chat_id": -79397419554856},
+        "timestamp": 1792945693163,
+        "body": {
+            "mid": "mid.ffffb7c9d902e7d801a173e421eb151e",
+            "seq": 117502488947135774,
+            "text": "",
+            "attachments": [
+                {
+                    "payload": {
+                        "photo_id": 47628366120,
+                        "token": "k+vM7fQ7KAoXXZaJPJOechUywYEN7ZtCH28q0Zc2IyBsDzxSKskKIjLS2WMKIIbqM9rfYbWLLigLX+nem2hbBZVrJ/mirq+kkP3QpOvKPe4=",
+                        "url": "https://i.oneme.ru/i?r=BTGWjORktRiuuNetttkJiSt5jBsd8iKpbRc4HJXsqVeDX2Zw5IyjmFCjDHMXD0Bdtn0"
+                    },
+                    "type": "image"
+                },
+                {
+                    "payload": {
+                        "photo_id": 47628498984,
+                        "token": "UzrzJ5HV2Qm9xztbnqp675DkuMGtS7tnZSNXIbPghBykRbK8iYgs10Z63QQO8bjed0Xklau+DNPuHGasrXY0sGm1XxXS/TLa2HLM5qcgq9A=",
+                        "url": "https://i.oneme.ru/i?r=BTGWjORktRiuuNetttkJiSt57Kixq3ZeN37Ib76kYMqO_WZw5IyjmFCjDHMXD0Bdtn0"
+                    },
+                    "type": "image"
+                },
+                {
+                    "payload": {
+                        "photo_id": 47628498728,
+                        "token": "HKAnHjlcxK58M9VbHcMk3FJ+d0HJHyYXH5yWfHi7iL4cVtlMcWTysEvGnfPfFm1nPFNF3x5ZTF1/YovhJixAJ4nqXL89wAAGkI+Na+gUO9k=",
+                        "url": "https://i.oneme.ru/i?r=BTGWjORktRiuuNetttkJiSt5XoeSMivMrk_d4fLP8LkYXGZw5IyjmFCjDHMXD0Bdtn0"
+                    },
+                    "type": "image"
+                },
+                {
+                    "payload": {
+                        "photo_id": 47628499240,
+                        "token": "tUjM0cIcwE2+V8CErET/NribZPwgZQW3Ag+M/fGb5v9FwgTelf64rfPS2ao3Z7OUR5bcS/mogaisu8dBAB0m4Qt01utgirgmUOYvu+FbG1I=",
+                        "url": "https://i.oneme.ru/i?r=BTGWjORktRiuuNetttkJiSt5X_PjLWhtGUdwV3mT8CytB2Zw5IyjmFCjDHMXD0Bdtn0"
+                    },
+                    "type": "image"
+                }
+            ]
+        },
+        "sender": {
+            "user_id": 206251816,
+            "first_name": "Артур",
+            "is_bot": False,
+            "last_name": "Беккер",
+            "last_activity_time": 1792945694000,
+            "name": "Артур Беккер"
+        }
+    },
+    "timestamp": 1792945693163,
+    "update_type": "message_created"
+}
+
+EXPECTED_PLATES = ["А111АА777", "В222ВВ777", "Е333ЕЕ777", "К444КК777"]
+
+
+@override_settings(WEBHOOK_SECRET="my_secret_123")
 class CarPhotoRecordTests(TestCase):
     def setUp(self):
         self.client = Client()
-        self.webhook_url = reverse('webhook_max')
-        current_app.control.purge()
+        self.webhook_url = "/api/webhook/max/"
+        self.headers = {"HTTP_X_MAX_BOT_API_SECRET": "my_secret_123"}
 
-    @patch('chek_n.tasks.recognize_plate')
-    def test_webhook_accepts_max_payload(self, mock_ocr):
-        mock_ocr.return_value = ("A001AA777", "/tmp/crop.jpg")
-
-        payload = {
-            "message": {
-                "recipient": {"chat_id": 987654321},
-                "body": {
-                    "text": "Проверь номер",
-                    "attachments": [
-                        {
-                            "type": "image",
-                            "payload": {
-                                "url": "https://via.placeholder.com/300.png",
-                                "token": "fake-token-123"
-                            }
-                        }
-                    ]
-                }
-            }
-        }
-
-        response = self.client.post(
+    def test_webhook_rejects_invalid_secret(self):
+        resp = self.client.post(
             self.webhook_url,
-            data=json.dumps(payload),
-            content_type='application/json',
-            HTTP_X_MAX_BOT_API_SECRET='my_secret_123'
+            data=json.dumps(WEBHOOK_PAYLOAD_1_PHOTO),
+            content_type="application/json",
+            HTTP_X_MAX_BOT_API_SECRET="wrong_secret"
         )
+        self.assertEqual(resp.status_code, 403)
 
-        self.assertEqual(response.status_code, 202)
-        data = response.json()
-        self.assertEqual(data['status'], 'accepted')
-        self.assertTrue(CarPhotoRecord.objects.exists())
-
-    def test_celery_task_processes_real_file(self):
-        if not FIXTURES_DIR.exists():
-            contents = [p.name for p in Path(BASE_DIR).iterdir()] if Path(BASE_DIR).is_dir() else []
-            self.skipTest(f"Папка {FIXTURES_DIR} не найдена. Видимые папки в BASE_DIR: {contents}")
-
-        files = list(FIXTURES_DIR.glob("*.jpg")) + list(FIXTURES_DIR.glob("*.png"))
-        if not files:
-            contents = [p.name for p in FIXTURES_DIR.iterdir()] if FIXTURES_DIR.is_dir() else []
-            self.skipTest(f"В папке {FIXTURES_DIR} нет картинок (.jpg/.png). Видимые файлы: {contents}")
-
-        test_file = files[0]
-
-        with open(test_file, "rb") as f:
-            real_image_bytes = f.read()
-
-        mock_resp = type('Response', (object,), {
-            'status_code': 200,
-            'content': real_image_bytes
-        })
-
-        with patch('chek_n.tasks.requests.get', return_value=mock_resp):
-            result = process_photo_task(
-                url="http://fake.url/test.jpg",
-                token="secret-token",
-                chat_id="999888777",
-                group_name="Real File Test Group",
-                source="max"
-            )
-
-        self.assertEqual(result['status'], 'success')
-
-        record = CarPhotoRecord.objects.last()
-        self.assertIsNotNone(record)
-        self.assertIsNotNone(record.plate_number)
-        self.assertEqual(record.status, 'success')
-        self.assertTrue(len(record.plate_number.strip()) > 0)
-
-    def test_webhook_rejects_without_secret(self):
-        payload = {"message": {"recipient": {"chat_id": 123}, "body": {"text": "Hi", "attachments": []}}}
-        response = self.client.post(self.webhook_url, data=json.dumps(payload), content_type='application/json')
-        self.assertEqual(response.status_code, 403)
-
-    def test_webhook_rejects_no_images(self):
-        payload = {"message": {"recipient": {"chat_id": 456}, "body": {"text": "Просто текст"}}}
-        response = self.client.post(
+    @patch.object(process_photo_task, "delay")
+    def test_webhook_accepts_max_payload(self, mock_delay):
+        resp = self.client.post(
             self.webhook_url,
-            data=json.dumps(payload),
-            content_type='application/json',
-            HTTP_X_MAX_BOT_API_SECRET='my_secret_123'
+            data=json.dumps(WEBHOOK_PAYLOAD_4_PHOTOS),
+            content_type="application/json",
+            **self.headers
         )
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
-        self.assertEqual(data['message'], 'Сообщение получено, картинок нет')
+        self.assertEqual(resp.status_code, 202)
+        data = resp.json()
+        self.assertEqual(data["images_count"], 4)
+        self.assertEqual(data["chat_id"], -79397419554856)
+        self.assertEqual(mock_delay.call_count, 4)
+
+    @patch("requests.get")
+    def test_celery_task_processes_max_photos(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+        mock_get.return_value = mock_response
+
+        mock_ocr_module = MagicMock()
+        mock_ocr_module.recognize_plate.side_effect = [(plate, None) for plate in EXPECTED_PLATES]
+
+        with patch.dict(sys.modules, {
+            "chek_n.ocr_service": mock_ocr_module,
+            "backend.chek_n.ocr_service": mock_ocr_module,
+        }):
+            attachments = WEBHOOK_PAYLOAD_4_PHOTOS["message"]["body"]["attachments"]
+            for att in attachments:
+                p = att["payload"]
+                process_photo_task(
+                    url=p["url"],
+                    token=p["token"],
+                    chat_id="-79397419554856",
+                    source="max"
+                )
+
+        records = CarPhotoRecord.objects.filter(status="success").order_by("id")
+        self.assertEqual(records.count(), 4)
+        saved_plates = [r.plate_number for r in records]
+        self.assertEqual(saved_plates, EXPECTED_PLATES)
