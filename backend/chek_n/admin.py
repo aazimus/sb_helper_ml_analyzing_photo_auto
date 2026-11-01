@@ -1,51 +1,29 @@
 # chek_n/admin.py
 from django.contrib import admin
-from django import forms
 from django.utils.html import format_html
 from .models import CarPhotoRecord, ChatGroup
-
-
-class CarPhotoRecordAdminForm(forms.ModelForm):
-    """Кастомная форма для админки CarPhotoRecord с выпадающим списком групп из ChatGroup"""
-    group_name = forms.ChoiceField(label="Группа чата", choices=[])
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Динамически получаем все существующие группы из таблицы ChatGroup
-        group_choices = list(ChatGroup.objects.values_list('name', 'name').order_by('name'))
-        
-        # Если групп еще нет, добавим заглушку, чтобы форма не падала
-        if not group_choices:
-            group_choices = [('default-group', 'default-group')]
-            
-        self.fields['group_name'].choices = group_choices
-
-    class Meta:
-        model = CarPhotoRecord
-        fields = '__all__'
 
 
 @admin.register(ChatGroup)
 class ChatGroupAdmin(admin.ModelAdmin):
     list_display = ('chat_id', 'name', 'is_active', 'created_at')
-    list_editable = ('is_active',)  # Галочка быстрого отключения/включения прямо в таблице
+    list_editable = ('is_active',)  # Галочка быстрого отключения прямо в таблице
     search_fields = ('chat_id', 'name')
     list_filter = ('is_active', 'created_at')
 
 
 @admin.register(CarPhotoRecord)
 class CarPhotoRecordAdmin(admin.ModelAdmin):
-    form = CarPhotoRecordAdminForm  # Подключаем форму с выпадающим списком групп
     list_display = (
         'id',
-        'group_name',       # группа на первом месте после id
+        'chat_group',      # Показываем связанную группу
         'plate_number',
         'crop_preview',
         'created_at_display',
         'status_display',
     )
-    list_filter = ('group_name', 'status', 'created_at')
-    search_fields = ('plate_number', 'group_name', 'photo_path')
+    list_filter = ('chat_group', 'status', 'created_at')
+    search_fields = ('plate_number', 'chat_group__name', 'photo_path')
     readonly_fields = (
         'created_at', 'updated_at',
         'original_preview', 'crop_preview_large',
@@ -56,7 +34,7 @@ class CarPhotoRecordAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ('Основное', {
-            'fields': ('group_name', 'plate_number', 'status', 'photo_path')
+            'fields': ('chat_group', 'plate_number', 'status', 'photo_path')
         }),
         ('Изображения', {
             'fields': (

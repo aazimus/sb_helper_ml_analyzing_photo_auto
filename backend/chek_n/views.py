@@ -2,11 +2,13 @@
 import json
 import logging
 import os
+import requests
 
 from django.conf import settings
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
+from .models import ChatGroup
 from .tasks import process_photo_task
 
 logger = logging.getLogger(__name__)
@@ -18,13 +20,56 @@ def _verify_webhook_secret(request) -> bool:
     Использует hmac.compare_digest для защиты от Timing Attacks.
     """
     secret = request.headers.get("X-Max-Bot-Api-Secret")
-    # Берем секрет из settings (если задан там) или из переменных окружения
-    expected = getattr(settings, "WEBHOOK_SECRET", None) or os.environ.get("WEBHOOK_SECRET", "my_secret_123")
+    # Ожидаемый секрет берем из настроек Django или переменных окружения без хардкода
+    expected = getattr(settings, "WEBHOOK_SECRET", None) or os.environ.get("WEBHOOK_SECRET")
 
-    if not secret:
+    if not secret or not expected:
         return False
 
     return hmac.compare_digest(str(secret), str(expected))
+
+
+def _get_or_create_chat_group(chat_id: str) -> ChatGroup:
+    """
+    Запрашивает актуальное название чата у API MAX и сохраняет/обновляет ChatGroup в БД.
+    """
+    url = f"https://platform-api2.max.ru/chats/{chat_id}"
+    
+    # Токен бота берется строго из настроек Django или переменных окружения
+    token = getattr(settings, "MAX_BOT_TOKEN", None) or os.environ.get("MAX_BOT_TOKEN")
+    
+    headers = {
+        "Authorization": token or "",
+        "Content-Type": "application/json"
+    }
+    
+    fallback_name = f"Чат {chat_id}"
+    group_name = fallback_name
+
+    if token:
+        try:
+            response = requests.get(url, headers=headers, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                # Извлекаем реальное название (title или name) из ответа API MAX
+                group_name = data.get("title") or data.get("name") or fallback_name
+        except Exception as e:
+            logger.warning(f"Не удалось запросить название чата {chat_id} у API MAX: {e}")
+    else:
+        logger.error("MAX_BOT_TOKEN не задан в настройках Django или переменной окружения!")
+
+    # Получаем или создаем группу в базе данных
+    chat_group, created = ChatGroup.objects.get_or_create(
+        chat_id=str(chat_id),
+        defaults={"name": group_name}
+    )
+
+    # Если группа уже существовала, но имя было техническим или изменилось — обновляем
+    if not created and (chat_group.name.startswith("chat_") or (group_name != fallback_name and chat_group.name != group_name)):
+        chat_group.name = group_name
+        chat_group.save()
+
+    return chat_group
 
 
 def _parse_max_message(payload: dict) -> dict:
@@ -70,8 +115,6 @@ def webhook_max(request):
     if request.method != "POST":
         return JsonResponse({"error": "Только POST"}, status=405)
 
-    # Если на основном вебхуке тоже нужна проверка секрета — оставьте этот блок.
-    # Если не нужна — закомментируйте следующие 4 строки.
     if not _verify_webhook_secret(request):
         logger.warning("Попытка доступа к webhook_max с неверным секретным ключом")
         return JsonResponse({"error": "Неверный секретный ключ"}, status=403)
@@ -92,12 +135,17 @@ def webhook_max(request):
         logger.warning("Не удалось извлечь chat_id из сообщения MAX")
         return JsonResponse({"error": "Не найден chat_id"}, status=400)
 
+    # Автоматически запрашиваем/создаем ChatGroup в БД с реальным названием из MAX API
+    chat_group = _get_or_create_chat_group(chat_id)
+    logger.info(f"Сообщение от чата: ID={chat_id}, Название={chat_group.name}")
+
     if not images:
         logger.info(f"Сообщение от chat_id={chat_id} без картинок. Текст: {text[:50]}")
         return JsonResponse({
             "status": "ok",
             "message": "Сообщение получено, картинок нет",
             "chat_id": chat_id,
+            "chat_name": chat_group.name,
         }, status=200)
 
     for img in images:
@@ -113,6 +161,7 @@ def webhook_max(request):
         "status": "accepted",
         "message": f"Принято {len(images)} изображений для обработки",
         "chat_id": chat_id,
+        "chat_name": chat_group.name,
         "images_count": len(images),
     }, status=202)
 
