@@ -20,7 +20,6 @@ def _verify_webhook_secret(request) -> bool:
     Использует hmac.compare_digest для защиты от Timing Attacks.
     """
     secret = request.headers.get("X-Max-Bot-Api-Secret")
-    # Ожидаемый секрет берем из настроек Django или переменных окружения без хардкода
     expected = getattr(settings, "WEBHOOK_SECRET", None) or os.environ.get("WEBHOOK_SECRET")
 
     if not secret or not expected:
@@ -34,8 +33,6 @@ def _get_or_create_chat_group(chat_id: str) -> ChatGroup:
     Запрашивает актуальное название чата у API MAX и сохраняет/обновляет ChatGroup в БД.
     """
     url = f"https://platform-api2.max.ru/chats/{chat_id}"
-    
-    # Токен бота берется строго из настроек Django или переменных окружения
     token = getattr(settings, "MAX_BOT_TOKEN", None) or os.environ.get("MAX_BOT_TOKEN")
     
     headers = {
@@ -48,24 +45,20 @@ def _get_or_create_chat_group(chat_id: str) -> ChatGroup:
 
     if token:
         try:
-            # Добавили verify=False для обхода ошибки SSL-сертификата в контейнере
             response = requests.get(url, headers=headers, timeout=5, verify=False)
             if response.status_code == 200:
                 data = response.json()
-                # Извлекаем реальное название (title или name) из ответа API MAX
                 group_name = data.get("title") or data.get("name") or fallback_name
         except Exception as e:
             logger.warning(f"Не удалось запросить название чата {chat_id} у API MAX: {e}")
     else:
         logger.error("MAX_BOT_TOKEN не задан в настройках Django или переменной окружения!")
 
-    # Получаем или создаем группу в базе данных
     chat_group, created = ChatGroup.objects.get_or_create(
         chat_id=str(chat_id),
         defaults={"name": group_name}
     )
 
-    # Если группа уже существовала, но имя было техническим или изменилось — обновляем
     if not created and (chat_group.name.startswith("chat_") or (group_name != fallback_name and chat_group.name != group_name)):
         chat_group.name = group_name
         chat_group.save()
@@ -75,8 +68,7 @@ def _get_or_create_chat_group(chat_id: str) -> ChatGroup:
 
 def _parse_max_message(payload: dict) -> dict:
     """
-    Встроенная версия парсера. Вытаскивает chat_id, текст и картинки (url + token).
-    Не падает, если структура JSON немного отличается.
+    Универсальный парсер сообщений MAX с отладочным логированием.
     """
     result = {
         "chat_id": None,
@@ -85,18 +77,33 @@ def _parse_max_message(payload: dict) -> dict:
     }
 
     if not isinstance(payload, dict):
+        logger.warning(f"_parse_max_message получил не словарь: {type(payload)}")
         return result
 
     try:
-        message = payload.get("message") or {}
-        recipient = message.get("recipient") or {}
-        result["chat_id"] = recipient.get("chat_id")
+        # Универсальный поиск chat_id в разных возможных вариантах структуры
+        chat_id = (
+            payload.get("chat_id") or
+            payload.get("chat", {}).get("id") or
+            payload.get("message", {}).get("recipient", {}).get("chat_id") or
+            payload.get("message", {}).get("chat", {}).get("id") or
+            payload.get("from", {}).get("id") or
+            payload.get("sender", {}).get("id")
+        )
+        result["chat_id"] = str(chat_id) if chat_id is not None else None
 
-        body = message.get("body") or {}
-        if "text" in body and body["text"] is not None:
-            result["text"] = str(body["text"])
+        # Извлекаем текст
+        message = payload.get("message") or payload
+        body = message.get("body") or message.get("text") or {}
+        
+        if isinstance(body, str):
+            result["text"] = body
+        elif isinstance(body, dict):
+            if "text" in body and body["text"] is not None:
+                result["text"] = str(body["text"])
 
-        attachments = body.get("attachments") or []
+        # Извлекаем вложения (картинки)
+        attachments = message.get("attachments") or body.get("attachments") or payload.get("attachments") or []
         for att in attachments:
             if isinstance(att, dict) and att.get("type") == "image":
                 p = att.get("payload") or {}
@@ -104,6 +111,7 @@ def _parse_max_message(payload: dict) -> dict:
                 token = p.get("token")
                 if url and token:
                     result["images"].append({"url": url, "token": token})
+
     except Exception as e:
         logger.warning(f"Ошибка при разборе структуры сообщения MAX: {e}")
 
@@ -126,6 +134,9 @@ def webhook_max(request):
         logger.error(f"Неверный JSON от MAX: {e}")
         return JsonResponse({"error": "Неверный JSON"}, status=400)
 
+    # ЛОГИРУЕМ СЫРОЙ JSON, ЧТОБЫ ВИДЕТЬ ВХОДЯЩИЕ ДАННЫЕ ОТ БОТА
+    logger.info(f"===> ВХОДЯЩИЙ ВЕБХУК MAX JSON: {json.dumps(payload, ensure_ascii=False)}")
+
     parsed = _parse_max_message(payload)
 
     chat_id = parsed["chat_id"]
@@ -133,10 +144,9 @@ def webhook_max(request):
     images = parsed["images"]
 
     if chat_id is None:
-        logger.warning("Не удалось извлечь chat_id из сообщения MAX")
+        logger.warning(f"Не удалось извлечь chat_id из сообщения MAX. Payload: {payload}")
         return JsonResponse({"error": "Не найден chat_id"}, status=400)
 
-    # Автоматически запрашиваем/создаем ChatGroup в БД с реальным названием из MAX API
     chat_group = _get_or_create_chat_group(chat_id)
     logger.info(f"Сообщение от чата: ID={chat_id}, Название={chat_group.name}")
 
@@ -156,7 +166,7 @@ def webhook_max(request):
             chat_id=str(chat_id),
             source="max"
         )
-        logger.info(f"Задача Celery поставлена: chat_id={chat_id}, url={img['url'][:60]}...")
+        logger.info(f"Задача Celery успешно поставлена: chat_id={chat_id}, url={img['url'][:60]}...")
 
     return JsonResponse({
         "status": "accepted",
