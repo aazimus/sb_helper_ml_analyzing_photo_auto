@@ -16,14 +16,14 @@ class ChatGroupAdmin(admin.ModelAdmin):
 class CarPhotoRecordAdmin(admin.ModelAdmin):
     list_display = (
         'id',
-        'chat_group',      # Показываем связанную группу
+        'group_name',      # Используем строковое поле группы
         'plate_number',
         'crop_preview',
         'created_at_display',
         'status_display',
     )
-    list_filter = ('chat_group', 'status', 'created_at')
-    search_fields = ('plate_number', 'chat_group__name', 'photo_path')
+    list_filter = ('group_name', 'status', 'created_at')
+    search_fields = ('plate_number', 'group_name', 'photo_path')
     readonly_fields = (
         'created_at', 'updated_at',
         'original_preview', 'crop_preview_large',
@@ -34,7 +34,7 @@ class CarPhotoRecordAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ('Основное', {
-            'fields': ('chat_group', 'plate_number', 'status', 'photo_path')
+            'fields': ('group_name', 'plate_number', 'status', 'photo_path')
         }),
         ('Изображения', {
             'fields': (
