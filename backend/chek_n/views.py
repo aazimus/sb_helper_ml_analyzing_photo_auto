@@ -48,7 +48,8 @@ def _get_or_create_chat_group(chat_id: str) -> ChatGroup:
 
     if token:
         try:
-            response = requests.get(url, headers=headers, timeout=5)
+            # Добавили verify=False для обхода ошибки SSL-сертификата в контейнере
+            response = requests.get(url, headers=headers, timeout=5, verify=False)
             if response.status_code == 200:
                 data = response.json()
                 # Извлекаем реальное название (title или name) из ответа API MAX
