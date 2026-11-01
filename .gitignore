@@ -55,7 +55,6 @@ models/*.onnx
 # Медиа, датасеты, исходники
 media/
 uploads/
-data/
 datasets/
 
 # Тесты и эмуляторы (фото)
