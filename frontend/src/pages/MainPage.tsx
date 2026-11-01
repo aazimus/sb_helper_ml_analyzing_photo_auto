@@ -77,7 +77,7 @@ export default function MainPage() {
       const list = await getGroups()
       setGroups(list)
     } catch {
-      navigate('/login')
+      // Игнорируем ошибки тихой фоновой загрузки групп
     }
   }
 
@@ -105,7 +105,6 @@ export default function MainPage() {
     setExporting(true)
     try {
       const { date_from, date_to } = buildDateTimeParams()
-      // забираем несколько страниц по текущим фильтрам
       const all: RecordItem[] = []
       let pageNum = 1
       let hasNext = true
@@ -141,17 +140,22 @@ export default function MainPage() {
     }
   }
 
+  // Загрузка групп при старте и каждые 10 секунд
   useEffect(() => {
     loadGroups()
+    const groupsInterval = setInterval(() => loadGroups(), 10000)
+    return () => clearInterval(groupsInterval)
   }, [])
 
+  // Первичная загрузка и переключение фильтров/пагинации для записей
   useEffect(() => {
     loadRecords()
   }, [group, searchDebounced, dates, times, page])
 
+  // Автообновление записей каждые 10 секунд
   useEffect(() => {
-    const id = setInterval(() => loadRecords(), 15000)
-    return () => clearInterval(id)
+    const recordsInterval = setInterval(() => loadRecords(), 10000)
+    return () => clearInterval(recordsInterval)
   }, [group, searchDebounced, dates, times, page])
 
   const columns = [
@@ -299,7 +303,7 @@ export default function MainPage() {
           }}
         >
           {selected ? (
-            <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
               <Typography.Title level={4} style={{ margin: 0 }}>
                 {selected.plate_number}
               </Typography.Title>
